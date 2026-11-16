@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # Active download / temporary extensions that must never be interrupted
 PARTIAL_EXTENSIONS = {
@@ -38,6 +38,16 @@ PARTIAL_EXTENSIONS = {
     ".aria2",
 }
 
+# System desktop icons preserved when --include-desktop is enabled
+SYSTEM_DESKTOP_FILES = {
+    "computer.desktop",
+    "trash-can.desktop",
+    "user-home.desktop",
+    "network.desktop",
+}
+
+DESKTOP_DIR_NAMES = {"desktop", "masaustu"}
+
 # Compound multi-dot extensions preserved as a single doctype
 COMPOUND_EXTENSIONS = (
     ".tar.gz",
@@ -47,7 +57,7 @@ COMPOUND_EXTENSIONS = (
     ".tar.lz",
 )
 
-# High-level categories for optional --category mode
+# High-level categories for --category mode
 CATEGORY_MAP: Dict[str, str] = {
     # Belgeler
     "pdf": "Belgeler",
@@ -65,17 +75,18 @@ CATEGORY_MAP: Dict[str, str] = {
     "pptx": "Belgeler",
     "odp": "Belgeler",
     "epub": "Belgeler",
-    # Görseller
-    "jpg": "Görseller",
-    "jpeg": "Görseller",
-    "png": "Görseller",
-    "gif": "Görseller",
-    "webp": "Görseller",
-    "svg": "Görseller",
-    "bmp": "Görseller",
-    "ico": "Görseller",
-    "heic": "Görseller",
-    "tiff": "Görseller",
+    "log": "Belgeler",
+    # Resimler
+    "jpg": "Resimler",
+    "jpeg": "Resimler",
+    "png": "Resimler",
+    "gif": "Resimler",
+    "webp": "Resimler",
+    "svg": "Resimler",
+    "bmp": "Resimler",
+    "ico": "Resimler",
+    "heic": "Resimler",
+    "tiff": "Resimler",
     # Videolar
     "mp4": "Videolar",
     "mkv": "Videolar",
@@ -84,14 +95,14 @@ CATEGORY_MAP: Dict[str, str] = {
     "mov": "Videolar",
     "flv": "Videolar",
     "wmv": "Videolar",
-    # Sesler
-    "mp3": "Sesler",
-    "wav": "Sesler",
-    "flac": "Sesler",
-    "ogg": "Sesler",
-    "m4a": "Sesler",
-    "aac": "Sesler",
-    "opus": "Sesler",
+    # Müzik
+    "mp3": "Müzik",
+    "wav": "Müzik",
+    "flac": "Müzik",
+    "ogg": "Müzik",
+    "m4a": "Müzik",
+    "aac": "Müzik",
+    "opus": "Müzik",
     # Arşivler
     "zip": "Arşivler",
     "rar": "Arşivler",
@@ -105,18 +116,24 @@ CATEGORY_MAP: Dict[str, str] = {
     "tar.xz": "Arşivler",
     "tar.bz2": "Arşivler",
     "tar.zst": "Arşivler",
-    # Kurulumlar & Disk İmajları
-    "deb": "Kurulumlar",
-    "rpm": "Kurulumlar",
-    "apk": "Kurulumlar",
-    "exe": "Kurulumlar",
-    "msi": "Kurulumlar",
-    "dmg": "Kurulumlar",
-    "appimage": "Kurulumlar",
-    "iso": "Kurulumlar",
-    "img": "Kurulumlar",
-    # Kod & Veri
-    "py": "Kodlar",
+    "tar.lz": "Arşivler",
+    "iso": "Arşivler",
+    "img": "Arşivler",
+    # Uygulamalar / Kurulumlar / Betikler / Kısayollar
+    "apk": "apps",
+    "deb": "apps",
+    "rpm": "apps",
+    "exe": "apps",
+    "msi": "apps",
+    "dmg": "apps",
+    "appimage": "apps",
+    "desktop": "apps",
+    "sh": "apps",
+    "py": "apps",
+    "bin": "apps",
+    "run": "apps",
+    "flatpakref": "apps",
+    # Kodlar
     "js": "Kodlar",
     "ts": "Kodlar",
     "html": "Kodlar",
@@ -125,13 +142,21 @@ CATEGORY_MAP: Dict[str, str] = {
     "yaml": "Kodlar",
     "yml": "Kodlar",
     "xml": "Kodlar",
-    "sh": "Kodlar",
     "sql": "Kodlar",
     "c": "Kodlar",
     "cpp": "Kodlar",
     "rs": "Kodlar",
     "go": "Kodlar",
     "java": "Kodlar",
+}
+
+CATEGORY_ALIASES: Dict[str, List[str]] = {
+    "Resimler": ["Resimler", "Pictures", "Görseller"],
+    "Videolar": ["Videolar", "Videos"],
+    "Müzik": ["Müzik", "Muzik", "Music", "Musics", "Sesler"],
+    "Belgeler": ["Belgeler", "Documents"],
+    "apps": ["apps", "Apps", "Uygulamalar", "Kurulumlar"],
+    "Arşivler": ["Arşivler", "Arsivler", "Archives"],
 }
 
 WELL_KNOWN_ALIASES: Dict[str, List[str]] = {
@@ -250,18 +275,85 @@ def is_partial_download(filename: str) -> bool:
     return any(lower.endswith(ext) for ext in PARTIAL_EXTENSIONS)
 
 
+def resolve_desktop_dir(home: Optional[Path] = None) -> Optional[Path]:
+    """Locate the user's Desktop directory (XDG config, ~/Desktop, or ~/Masaüstü)."""
+    base_home = (home or Path.home()).resolve()
+
+    if home is None:
+        xdg_desktop = os.environ.get("XDG_DESKTOP_DIR")
+        if xdg_desktop:
+            p = Path(os.path.expanduser(xdg_desktop)).resolve()
+            if p.is_dir():
+                return p
+        user_dirs_file = base_home / ".config" / "user-dirs.dirs"
+        if user_dirs_file.is_file():
+            try:
+                for line in user_dirs_file.read_text(
+                    encoding="utf-8", errors="ignore"
+                ).splitlines():
+                    line = line.strip()
+                    if line.startswith("XDG_DESKTOP_DIR="):
+                        raw_val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        expanded = raw_val.replace("$HOME", str(base_home))
+                        p = Path(os.path.expanduser(expanded)).resolve()
+                        if p.is_dir():
+                            return p
+            except OSError:
+                pass
+
+    for name in ("Desktop", "Masaüstü", "Masaustu", "desktop"):
+        candidate = base_home / name
+        if candidate.is_dir():
+            return candidate.resolve()
+
+    return None
+
+
 def find_or_plan_dest_folder(
     target_dir: Path,
     folder_key: str,
     existing_dirs_map: Dict[str, Path],
+    mode: str = "doctype",
+    existing_dirs_tr_map: Optional[Dict[str, Path]] = None,
 ) -> Tuple[Path, bool]:
     """
-    Check if a matching folder already exists in target_dir (case-insensitively).
+    Check if a matching folder already exists in target_dir (case-insensitively and
+    via category aliases when mode == 'category').
     Returns (folder_path, will_be_newly_created).
     """
-    lookup = folder_key.casefold()
-    if lookup in existing_dirs_map:
-        return existing_dirs_map[lookup], False
+    candidates = (
+        CATEGORY_ALIASES.get(folder_key, [folder_key])
+        if mode == "category"
+        else [folder_key]
+    )
+
+    for alias in candidates:
+        lookup = alias.casefold()
+        if lookup in existing_dirs_map:
+            matched = existing_dirs_map[lookup]
+            if (
+                mode == "doctype"
+                and folder_key == "desktop"
+                and normalize_tr(matched.name) in DESKTOP_DIR_NAMES
+                and matched.name != "desktop"
+            ):
+                continue
+            return matched, False
+
+    if existing_dirs_tr_map:
+        for alias in candidates:
+            tr_lookup = normalize_tr(alias)
+            if tr_lookup in existing_dirs_tr_map:
+                matched = existing_dirs_tr_map[tr_lookup]
+                if (
+                    mode == "doctype"
+                    and folder_key == "desktop"
+                    and normalize_tr(matched.name) in DESKTOP_DIR_NAMES
+                    and matched.name != "desktop"
+                ):
+                    continue
+                return matched, False
+
     return target_dir / folder_key, True
 
 
@@ -305,12 +397,15 @@ def sort_directory(
     include_hidden: bool = False,
     dry_run: bool = False,
     history_path: Optional[Path] = None,
+    include_desktop: bool = False,
+    desktop_dir: Optional[Path | str] = None,
 ) -> dict:
     """
     Sort top-level files inside `target_dir` into subdirectories according to `mode`:
       - 'doctype': By file extension (pdf/, docx/, jpg/, ...), reusing existing folders case-insensitively.
-      - 'category': By semantic group (Belgeler/, Görseller/, Videolar/, Arşivler/, ...).
+      - 'category': By semantic group (Belgeler/, Resimler/, Videolar/, Müzik/, apps/, Arşivler/, ...).
       - 'date': By file modification YYYY-MM.
+    When `include_desktop` is True, files from Desktop/Masaüstü (excluding system icons) are also included.
     """
     target = Path(target_dir).resolve()
     if not target.is_dir():
@@ -318,13 +413,36 @@ def sort_directory(
 
     history_file = history_path or default_history_path()
 
-    # Map existing immediate subdirectories case-insensitively
+    resolved_desktop: Optional[Path] = None
+    if desktop_dir is not None:
+        cand = Path(desktop_dir).resolve()
+        if cand.is_dir():
+            resolved_desktop = cand
+    elif include_desktop:
+        if target != Path.home().resolve():
+            resolved_desktop = resolve_desktop_dir(home=target)
+        if resolved_desktop is None:
+            resolved_desktop = resolve_desktop_dir()
+
+    # Map existing immediate subdirectories case-insensitively and Turkish-normalized
     existing_dirs_map: Dict[str, Path] = {}
+    existing_dirs_tr_map: Dict[str, Path] = {}
+    existing_subdirs: List[Path] = []
     for entry in sorted(target.iterdir(), key=lambda p: p.name):
         if entry.is_dir():
+            existing_subdirs.append(entry)
             key = entry.name.casefold()
             if key not in existing_dirs_map:
                 existing_dirs_map[key] = entry
+            tr_key = normalize_tr(entry.name)
+            if tr_key not in existing_dirs_tr_map:
+                existing_dirs_tr_map[tr_key] = entry
+
+    has_desktop_dir = any(
+        (normalize_tr(entry.name) in DESKTOP_DIR_NAMES and entry.name != "desktop")
+        or (resolved_desktop is not None and entry.resolve() == resolved_desktop)
+        for entry in existing_subdirs
+    )
 
     moves: List[dict] = []
     created_dirs: List[str] = []
@@ -332,18 +450,39 @@ def sort_directory(
     reserved_destinations: set = set()
     skipped_hidden = 0
     skipped_partial = 0
+    skipped_system_desktop = 0
+    desktop_included_count = 0
     groups_summary: Dict[str, dict] = {}
 
-    entries = sorted(
-        [e for e in target.iterdir() if e.is_file() and not e.is_symlink()],
-        key=lambda e: e.name.lower(),
-    )
+    scan_sources: List[Tuple[Path, bool]] = [
+        (target, resolved_desktop is not None and target == resolved_desktop)
+    ]
+    if (
+        include_desktop
+        and resolved_desktop is not None
+        and resolved_desktop.is_dir()
+        and resolved_desktop != target
+    ):
+        scan_sources.append((resolved_desktop, True))
 
-    for file_path in entries:
+    entries: List[Tuple[Path, bool]] = []
+    for src_dir, is_desktop_src in scan_sources:
+        dir_files = sorted(
+            [e for e in src_dir.iterdir() if e.is_file() and not e.is_symlink()],
+            key=lambda e: e.name.lower(),
+        )
+        for f in dir_files:
+            entries.append((f, is_desktop_src))
+
+    for file_path, is_desktop_src in entries:
         fname = file_path.name
 
         if fname.startswith(".") and not include_hidden:
             skipped_hidden += 1
+            continue
+
+        if is_desktop_src and fname.casefold() in SYSTEM_DESKTOP_FILES:
+            skipped_system_desktop += 1
             continue
 
         if is_partial_download(fname):
@@ -353,6 +492,20 @@ def sort_directory(
         ext = extract_doctype(fname)
         if mode == "doctype":
             folder_key = ext
+            if folder_key == "desktop" and has_desktop_dir:
+                apps_match = next(
+                    (
+                        existing_dirs_map.get(a.casefold())
+                        or existing_dirs_tr_map.get(normalize_tr(a))
+                        for a in CATEGORY_ALIASES["apps"]
+                        if a.casefold() in existing_dirs_map
+                        or normalize_tr(a) in existing_dirs_tr_map
+                    ),
+                    None,
+                )
+                folder_key = (
+                    apps_match.name if apps_match is not None else "desktop_shortcuts"
+                )
         elif mode == "category":
             folder_key = CATEGORY_MAP.get(ext, "Diğer")
         elif mode == "date":
@@ -363,17 +516,27 @@ def sort_directory(
             raise ValueError(f"Bilinmeyen sıralama modu: {mode}")
 
         dest_folder, is_new_folder = find_or_plan_dest_folder(
-            target, folder_key, existing_dirs_map
+            target,
+            folder_key,
+            existing_dirs_map,
+            mode=mode,
+            existing_dirs_tr_map=existing_dirs_tr_map,
         )
 
         if is_new_folder and str(dest_folder) not in created_dirs_set:
             if not dest_folder.is_dir():
                 created_dirs.append(str(dest_folder))
                 created_dirs_set.add(str(dest_folder))
-            existing_dirs_map[folder_key.casefold()] = dest_folder
+            existing_dirs_map[dest_folder.name.casefold()] = dest_folder
+            existing_dirs_tr_map[normalize_tr(dest_folder.name)] = dest_folder
+            existing_dirs_map.setdefault(folder_key.casefold(), dest_folder)
+            existing_dirs_tr_map.setdefault(normalize_tr(folder_key), dest_folder)
 
         safe_dest = compute_safe_destination(dest_folder, fname, reserved_destinations)
         reserved_destinations.add(safe_dest)
+
+        if is_desktop_src:
+            desktop_included_count += 1
 
         folder_label = dest_folder.name
         if folder_label not in groups_summary:
@@ -427,10 +590,14 @@ def sort_directory(
         "target_dir": str(target),
         "mode": mode,
         "dry_run": dry_run,
+        "include_desktop": include_desktop,
+        "desktop_dir": str(resolved_desktop) if resolved_desktop else None,
+        "desktop_moved_count": desktop_included_count,
         "moved_count": len(moves),
         "created_dirs_count": len(created_dirs),
         "skipped_hidden_count": skipped_hidden,
         "skipped_partial_count": skipped_partial,
+        "skipped_system_desktop_count": skipped_system_desktop,
         "groups": groups_summary,
         "moves": moves,
     }
@@ -541,6 +708,8 @@ def print_report(result: dict) -> None:
     print(f"\n╭─ {dry_prefix}sortingen v{VERSION}")
     print(f"├─ Klasör : {target}")
     print(f"├─ Mod    : {mode_str}")
+    if result.get("include_desktop") and result.get("desktop_dir"):
+        print(f"├─ Masaüstü: {result['desktop_dir']} (dahil edildi)")
 
     if result["moved_count"] == 0:
         print("╰─ Durum  : Düzenlenecek dosya bulunamadı (klasör zaten düzenli).")
@@ -568,6 +737,12 @@ def print_report(result: dict) -> None:
                 print(f"│     ↳ {f_item['from']}")
         if len(info["files"]) > 5:
             print(f"│     ↳ ... ve {len(info['files']) - 5} dosya daha")
+
+    if result.get("skipped_system_desktop_count", 0) > 0:
+        print("│")
+        print(
+            f"├─ 🖥️  Korunan sistem ikonları: {result['skipped_system_desktop_count']} dosya"
+        )
 
     if result["skipped_partial_count"] > 0:
         print("│")
@@ -605,13 +780,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--category",
         "-c",
         action="store_true",
-        help="Dosyaları ana kategorilere (Belgeler, Görseller, Videolar, Arşivler vb.) ayırır.",
+        help="Dosyaları ana kategorilere (Belgeler, Resimler, Videolar, Müzik, apps, Arşivler vb.) ayırır.",
     )
     parser.add_argument(
         "--date",
         "-d",
         action="store_true",
         help="Dosyaları değiştirilme tarihine (YYYY-AA) göre klasörlere ayırır.",
+    )
+    parser.add_argument(
+        "--include-desktop",
+        "-D",
+        action="store_true",
+        help="Masaüstü (Desktop/Masaüstü) dosyalarını da taramaya dahil eder (sistem ikonları korunur).",
     )
     parser.add_argument(
         "--undo",
@@ -688,6 +869,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             mode=mode,
             include_hidden=args.all,
             dry_run=args.dry_run,
+            include_desktop=args.include_desktop,
         )
 
         if args.json:

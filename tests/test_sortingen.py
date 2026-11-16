@@ -231,6 +231,184 @@ class TestSortingen(unittest.TestCase):
         self.assertTrue((target / "diger" / "pdf").is_file())
         self.assertTrue((target / "pdf" / "doc.pdf").is_file())
 
+    def test_10_category_reuses_existing_xdg_and_creates_apps(self):
+        """Category mode reuses existing XDG/alias folders and maps apps, media, logs, archives cleanly."""
+        import sortingen
+
+        target = self.root / "home_sim"
+        target.mkdir()
+        (target / "Resimler").mkdir()
+        (target / "Documents").mkdir()
+        (target / "Music").mkdir()
+        (target / "Videos").mkdir()
+
+        (target / "foto.png").write_text("img", encoding="utf-8")
+        (target / "klip.mp4").write_text("vid", encoding="utf-8")
+        (target / "sarki.mp3").write_text("aud", encoding="utf-8")
+        (target / "rapor.pdf").write_text("pdf", encoding="utf-8")
+        (target / "kayit.log").write_text("log", encoding="utf-8")
+        (target / "yedek.iso").write_text("iso", encoding="utf-8")
+        (target / "app.apk").write_text("apk", encoding="utf-8")
+        (target / "script.sh").write_text("sh", encoding="utf-8")
+        (target / "tool.py").write_text("py", encoding="utf-8")
+        (target / "kisayol.desktop").write_text("desk", encoding="utf-8")
+
+        res = sortingen.sort_directory(
+            target, mode="category", history_path=self.history_file
+        )
+
+        self.assertEqual(res["moved_count"], 10)
+        self.assertTrue((target / "Resimler" / "foto.png").is_file())
+        self.assertTrue((target / "Videos" / "klip.mp4").is_file())
+        self.assertTrue((target / "Music" / "sarki.mp3").is_file())
+        self.assertTrue((target / "Documents" / "rapor.pdf").is_file())
+        self.assertTrue((target / "Documents" / "kayit.log").is_file())
+        self.assertTrue((target / "Arşivler" / "yedek.iso").is_file())
+        self.assertTrue((target / "apps" / "app.apk").is_file())
+        self.assertTrue((target / "apps" / "script.sh").is_file())
+        self.assertTrue((target / "apps" / "tool.py").is_file())
+        self.assertTrue((target / "apps" / "kisayol.desktop").is_file())
+        self.assertFalse((target / "Videolar").exists())
+        self.assertFalse((target / "Belgeler").exists())
+        self.assertFalse((target / "Müzik").exists())
+
+    def test_11_doctype_avoids_desktop_folder_collision(self):
+        """In doctype mode, .desktop files never move into Desktop/Masaüstü when it exists; normal subdirs still use desktop/."""
+        import sortingen
+
+        home_like = self.root / "home_desktop_clash"
+        home_like.mkdir()
+        (home_like / "Desktop").mkdir()
+        (home_like / "app.desktop").write_text("[Desktop Entry]", encoding="utf-8")
+
+        res1 = sortingen.sort_directory(
+            home_like, mode="doctype", history_path=self.history_file
+        )
+        self.assertEqual(res1["moved_count"], 1)
+        self.assertFalse((home_like / "Desktop" / "app.desktop").exists())
+        self.assertTrue((home_like / "desktop_shortcuts" / "app.desktop").is_file())
+
+        # When 'apps' already exists alongside Desktop, doctype uses apps
+        home_with_apps = self.root / "home_with_apps"
+        home_with_apps.mkdir()
+        (home_with_apps / "Desktop").mkdir()
+        (home_with_apps / "apps").mkdir()
+        (home_with_apps / "borfek.desktop").write_text("[Desktop Entry]", encoding="utf-8")
+        res2 = sortingen.sort_directory(
+            home_with_apps, mode="doctype", history_path=self.history_file
+        )
+        self.assertEqual(res2["moved_count"], 1)
+        self.assertTrue((home_with_apps / "apps" / "borfek.desktop").is_file())
+
+        # Inside a normal folder (e.g. apps/), doctype still creates desktop/
+        apps_dir = self.root / "apps_dir"
+        apps_dir.mkdir()
+        (apps_dir / "kush.desktop").write_text("[Desktop Entry]", encoding="utf-8")
+        res3 = sortingen.sort_directory(
+            apps_dir, mode="doctype", history_path=self.history_file
+        )
+        self.assertEqual(res3["moved_count"], 1)
+        self.assertTrue((apps_dir / "desktop" / "kush.desktop").is_file())
+
+    def test_12_include_desktop_preserves_system_icons_and_supports_undo(self):
+        """--include-desktop moves non-system Desktop files, keeps system icons, and supports undo."""
+        import sortingen
+
+        fake_home = self.root / "toshi_home"
+        fake_home.mkdir()
+        desktop = fake_home / "Desktop"
+        desktop.mkdir()
+        belgeler = fake_home / "Belgeler"
+        belgeler.mkdir()
+
+        # Main home files
+        (fake_home / "aura-lan.apk").write_text("apk", encoding="utf-8")
+        (fake_home / "log.txt").write_text("log", encoding="utf-8")
+        # Desktop files (system icons + regular files)
+        (desktop / "computer.desktop").write_text("sys1", encoding="utf-8")
+        (desktop / "trash-can.desktop").write_text("sys2", encoding="utf-8")
+        (desktop / "user-home.desktop").write_text("sys3", encoding="utf-8")
+        (desktop / "network.desktop").write_text("sys4", encoding="utf-8")
+        (desktop / "borfek.desktop").write_text("app1", encoding="utf-8")
+        (desktop / "kilavuz.txt").write_text("doc1", encoding="utf-8")
+
+        res = sortingen.sort_directory(
+            fake_home,
+            mode="category",
+            include_desktop=True,
+            desktop_dir=desktop,
+            history_path=self.history_file,
+        )
+
+        self.assertEqual(res["moved_count"], 4)
+        self.assertEqual(res["skipped_system_desktop_count"], 4)
+        self.assertTrue((fake_home / "apps" / "aura-lan.apk").is_file())
+        self.assertTrue((fake_home / "apps" / "borfek.desktop").is_file())
+        self.assertTrue((belgeler / "log.txt").is_file())
+        self.assertTrue((belgeler / "kilavuz.txt").is_file())
+        # System icons remain untouched on Desktop
+        for icon_name in (
+            "computer.desktop",
+            "trash-can.desktop",
+            "user-home.desktop",
+            "network.desktop",
+        ):
+            self.assertTrue((desktop / icon_name).is_file())
+
+        # Undo restores both home and desktop files and removes newly created 'apps'
+        undo_res = sortingen.undo_last_sort(fake_home, history_path=self.history_file)
+        self.assertEqual(undo_res["restored_count"], 4)
+        self.assertTrue((fake_home / "aura-lan.apk").is_file())
+        self.assertTrue((fake_home / "log.txt").is_file())
+        self.assertTrue((desktop / "borfek.desktop").is_file())
+        self.assertTrue((desktop / "kilavuz.txt").is_file())
+        self.assertFalse((fake_home / "apps").exists())
+        self.assertTrue(belgeler.is_dir())
+
+    def test_13_cli_include_desktop_flag(self):
+        """CLI supports --category --include-desktop (-c -D) and records undo history."""
+        fake_home = self.root / "cli_home"
+        fake_home.mkdir()
+        desktop = fake_home / "Desktop"
+        desktop.mkdir()
+        (fake_home / "Belgeler").mkdir()
+        (desktop / "computer.desktop").write_text("sys", encoding="utf-8")
+        (desktop / "kush.desktop").write_text("app", encoding="utf-8")
+        (desktop / "readme.txt").write_text("doc", encoding="utf-8")
+        (fake_home / "script.py").write_text("py", encoding="utf-8")
+
+        env = os.environ.copy()
+        env["HOME"] = str(fake_home)
+        env["XDG_CACHE_HOME"] = str(fake_home / ".cache")
+        env.pop("XDG_DESKTOP_DIR", None)
+
+        proc = subprocess.run(
+            [str(CLI_BIN), str(fake_home), "--category", "--include-desktop"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=5,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertTrue((fake_home / "apps" / "kush.desktop").is_file())
+        self.assertTrue((fake_home / "apps" / "script.py").is_file())
+        self.assertTrue((fake_home / "Belgeler" / "readme.txt").is_file())
+        self.assertTrue((desktop / "computer.desktop").is_file())
+        self.assertFalse((desktop / "kush.desktop").exists())
+        self.assertFalse((desktop / "readme.txt").exists())
+
+        undo_proc = subprocess.run(
+            [str(CLI_BIN), str(fake_home), "--undo"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=5,
+        )
+        self.assertEqual(undo_proc.returncode, 0, msg=undo_proc.stderr)
+        self.assertTrue((desktop / "kush.desktop").is_file())
+        self.assertTrue((desktop / "readme.txt").is_file())
+        self.assertTrue((fake_home / "script.py").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
